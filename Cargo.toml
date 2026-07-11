@@ -9,6 +9,14 @@ readme = "README.md"
 keywords = ["mcp", "ppk2", "nordic", "power-profiler", "current"]
 categories = ["command-line-utilities", "science", "embedded"]
 
+# The `serialport` dependency links libudev at build time on Linux. docs.rs
+# provides it on its default Linux target (serialport and ppk2 both build there),
+# so pin doc builds to that target instead of attempting others where the system
+# library may be absent.
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu"]
+
 [dependencies]
 anyhow = "1.0.103"
 ppk2 = "0.1.3"
