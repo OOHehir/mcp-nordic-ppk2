@@ -56,7 +56,22 @@ sudo apt install libudev-dev pkg-config   # Debian/Ubuntu
 cargo install --path .                     # builds and installs `mcp-nordic-ppk2` to ~/.cargo/bin
 ```
 
-The user running it must be in the `dialout` group to access the serial port.
+### Device access (Linux)
+
+To reach the PPK2's serial port without root, install Nordic's official udev
+rules — [`NordicSemiconductor/nrf-udev`](https://github.com/NordicSemiconductor/nrf-udev)
+— which grant access to all Nordic devices (USB vendor `1915`, including the
+PPK2 at `1915:c00a`):
+
+```sh
+# Debian/Ubuntu: grab the latest .deb from the releases page, then
+sudo dpkg -i nrf-udev_*.deb
+# other distros: copy 71-nrf.rules into /etc/udev/rules.d/ and reload
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Replug the device afterward. As a simpler alternative, add your user to the
+`dialout` group (`sudo usermod -aG dialout $USER`, then log out and back in).
 
 <details>
 <summary>Building without <code>libudev-dev</code> (e.g. no root)</summary>
@@ -97,6 +112,14 @@ Claude Desktop's `PATH`):
 - Voltage/DUT-power changes are only allowed while **not** measuring.
 - Source mode = the PPK2 supplies the DUT (0.8–5 V). Ampere mode = external
   supply, PPK2 as an inline meter.
+
+## Platform support
+
+Developed and tested on **Linux**. The underlying `serialport` crate also
+supports macOS and Windows, and the port is just a `port` argument, so those
+platforms should work but are untested — pass the OS-appropriate port (e.g.
+`/dev/cu.usbmodem*` on macOS, `COM3` on Windows). The libudev/udev notes above
+apply to Linux only.
 
 ## Direct smoke test (no MCP)
 
