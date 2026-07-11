@@ -1,0 +1,7 @@
+/target
+*.csv
+
+# Machine-specific local build workaround for this sandbox (no libudev-dev, no sudo).
+# On a normal machine, `apt install libudev-dev` makes these unnecessary.
+/.libudev-shim/
+/.cargo/

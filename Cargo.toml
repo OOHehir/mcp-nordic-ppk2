@@ -1,0 +1,21 @@
+[package]
+name = "mcp-nordic-ppk2"
+version = "0.1.0"
+edition = "2024"
+description = "Model Context Protocol (MCP) server for the Nordic Power Profiler Kit II (PPK2) — measure current and use the digital channels as triggers, from an MCP client."
+license = "MIT"
+repository = "https://github.com/OOHehir/mcp-nordic-ppk2"
+readme = "README.md"
+keywords = ["mcp", "ppk2", "nordic", "power-profiler", "current"]
+categories = ["command-line-utilities", "science", "embedded"]
+
+[dependencies]
+anyhow = "1.0.103"
+ppk2 = "0.1.3"
+rmcp = { version = "2.2.0", features = ["server", "transport-io"] }
+schemars = "1.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "io-std"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
