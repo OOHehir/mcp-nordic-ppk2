@@ -58,9 +58,9 @@ The server has three guardrails:
   than quietly applying 5.0 V.
 - **Operator ceiling.** Set `--max-voltage-mv <mV>` (or the
   `PPK2_MAX_VOLTAGE_MV` env var) to your DUT's rating and the server will refuse
-  any higher voltage — so the model *cannot* exceed it. Defaults to the 5000 mV
-  hardware maximum if unset. This is the real per-DUT rail: **set it to match
-  your part** (e.g. `3300` for a 3.3 V board).
+  any higher voltage — so the model *cannot* exceed it. Defaults to **3300 mV**
+  (the most common logic level) if unset; raise it to `5000` for 5 V parts. This
+  is the real per-DUT rail: **set it to match your part**.
 
   ```json
   { "mcpServers": { "ppk2": { "command": "mcp-nordic-ppk2",

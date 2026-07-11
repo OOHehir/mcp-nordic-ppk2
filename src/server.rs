@@ -119,7 +119,7 @@ impl Ppk2Server {
 
 impl Default for Ppk2Server {
     fn default() -> Self {
-        Self::new(crate::controller::VDD_HW_MAX_MV)
+        Self::new(crate::controller::DEFAULT_MAX_VOLTAGE_MV)
     }
 }
 

@@ -34,6 +34,11 @@ const UC_PER_MAH: f64 = 3.6e6;
 pub const VDD_MIN_MV: u16 = 800;
 pub const VDD_HW_MAX_MV: u16 = 5000;
 
+/// Default source-voltage safety ceiling (mV) when the operator sets none. 3300
+/// mV (3.3 V) is the most common logic level, so it's the safe-by-default cap;
+/// raise it via `--max-voltage-mv` / `PPK2_MAX_VOLTAGE_MV` for 5 V parts.
+pub const DEFAULT_MAX_VOLTAGE_MV: u16 = 3300;
+
 /// Reject a source voltage that is out of the PPK2's range, or above the
 /// operator-configured safety ceiling, rather than silently clamping it (which
 /// is what the underlying crate would otherwise do — a footgun for a DUT).
