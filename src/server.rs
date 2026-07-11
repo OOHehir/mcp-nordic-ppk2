@@ -36,7 +36,9 @@ pub struct Ppk2Server {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ConnectArgs {
-    /// Serial port path. Defaults to /dev/ttyACM0.
+    /// Serial port path. Omit to auto-discover the PPK2 by USB VID:PID (1915:c00a),
+    /// selecting the control interface — this also follows the device across a
+    /// USB re-enumeration. Pass an explicit path to override.
     #[serde(default)]
     pub port: Option<String>,
     /// Measurement mode: "source" (PPK2 supplies the DUT) or "ampere" (external supply, inline meter). Defaults to source.
@@ -113,7 +115,9 @@ impl Ppk2Server {
         })
         .await
         .map_err(|e| McpError::internal_error(format!("worker panicked: {e}"), None))?
-        .map_err(|e| McpError::internal_error(e.to_string(), None))
+        // `{e:#}` renders the full anyhow source chain (context + underlying
+        // serialport/IO error incl. the OS errno), not just the top-level message.
+        .map_err(|e| McpError::internal_error(format!("{e:#}"), None))
     }
 }
 
@@ -169,7 +173,7 @@ fn trigger_arg(t: Option<String>) -> Result<Option<[Level; 8]>> {
 
 #[tool_router]
 impl Ppk2Server {
-    #[tool(description = "Connect to the PPK2 over serial, read calibration metadata, and set the source voltage. Leaves DUT power off.")]
+    #[tool(description = "Connect to the PPK2 over serial, read calibration metadata, and set the source voltage. Auto-discovers the device by USB VID:PID if no port is given. Leaves DUT power off.")]
     async fn ppk2_connect(
         &self,
         Parameters(args): Parameters<ConnectArgs>,
@@ -177,7 +181,11 @@ impl Ppk2Server {
         let max_voltage_mv = self.max_voltage_mv;
         let s = self
             .blocking(move |g| {
-                let port = args.port.unwrap_or_else(|| "/dev/ttyACM0".to_string());
+                // No explicit port -> find the PPK2 by USB VID:PID (control interface).
+                let port = match args.port {
+                    Some(p) => p,
+                    None => crate::controller::discover_ppk2_port()?,
+                };
                 let mode = match args.mode.as_deref() {
                     Some(m) => m.parse::<MeasurementMode>().map_err(|e| anyhow!("{e}"))?,
                     None => MeasurementMode::Source,
@@ -187,8 +195,8 @@ impl Ppk2Server {
                 let st = ctl.status();
                 *g = Some(ctl);
                 Ok(format!(
-                    "connected: port={} mode={:?} voltage={}mV dut_power={}",
-                    st.port, st.mode, st.voltage_mv, st.dut_power
+                    "connected: port={} mode={:?} voltage={}mV max_voltage={}mV dut_power={}",
+                    st.port, st.mode, st.voltage_mv, st.max_voltage_mv, st.dut_power
                 ))
             })
             .await?;
@@ -310,10 +318,18 @@ impl Ppk2Server {
                     None => Ok("not connected".to_string()),
                     Some(c) => {
                         let st = c.status();
+                        // When the link is broken the last-commanded DUT power is
+                        // unreliable, so report it as unknown (with the last value)
+                        // rather than asserting a state we can no longer verify.
+                        let dut_power = if st.broken {
+                            format!("unknown(link-down; last={})", st.dut_power)
+                        } else {
+                            st.dut_power.to_string()
+                        };
                         Ok(format!(
                             "port={} connected={} measuring={} broken={} mode={:?} voltage={}mV max_voltage={}mV dut_power={} sps={:?} buffered={:?} elapsed_s={:?} trigger={:?}",
                             st.port, st.connected, st.measuring, st.broken, st.mode,
-                            st.voltage_mv, st.max_voltage_mv, st.dut_power, st.sps, st.buffered_samples, st.elapsed_s, st.trigger
+                            st.voltage_mv, st.max_voltage_mv, dut_power, st.sps, st.buffered_samples, st.elapsed_s, st.trigger
                         ))
                     }
                 }
@@ -328,9 +344,13 @@ impl ServerHandler for Ppk2Server {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "Controls a Nordic Power Profiler Kit II (PPK2) for current measurement. \
-             Call ppk2_connect first (defaults: /dev/ttyACM0, source mode, 3300 mV), \
-             then ppk2_configure to set voltage / DUT power, and ppk2_measure for a \
-             fixed capture or ppk2_start/ppk2_stop for background sessions. Current-only.",
+             Call ppk2_connect first (auto-discovers the device by USB VID:PID; \
+             defaults to source mode, 3300 mV), then ppk2_configure to set voltage \
+             / DUT power, and ppk2_measure for a fixed capture or ppk2_start/ppk2_stop \
+             for background sessions. If a call fails with a link/IO error, the \
+             connection is marked broken and DUT power becomes unknown — call \
+             ppk2_connect again to recover (it re-discovers the port and forces \
+             power off). Current-only.",
         )
     }
 }

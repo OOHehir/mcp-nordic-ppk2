@@ -396,6 +396,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "serialport",
  "tokio",
  "tracing",
  "tracing-subscriber",

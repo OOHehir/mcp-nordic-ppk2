@@ -24,7 +24,7 @@ nor possible, so the server:
 
 | Tool | Arguments | Description |
 |------|-----------|-------------|
-| `ppk2_connect` | `port?`, `mode?` (`source`\|`ampere`), `voltage_mv?` | Open the device, read calibration, set voltage. Defaults: `/dev/ttyACM0`, source, 3300 mV. |
+| `ppk2_connect` | `port?`, `mode?` (`source`\|`ampere`), `voltage_mv?` | Open the device, read calibration, set voltage. Auto-discovers the port by USB VID:PID if omitted. Defaults: source, 3300 mV. |
 | `ppk2_configure` | `voltage_mv?`, `dut_power?` | Set voltage and/or toggle DUT power. Idle only. |
 | `ppk2_measure` | `duration_s`, `sps?`, `trigger?` | Capture for a fixed time, return stats. Blocks for the duration. |
 | `ppk2_start` | `sps?`, `retention_s?`, `trigger?` | Begin a background session. |
@@ -136,11 +136,24 @@ Claude Desktop's `PATH`):
 
 ## Device notes
 
-- The PPK2 enumerates **two** serial ports; use the first (`/dev/ttyACM0`,
-  USB interface 01).
+- The PPK2 enumerates **two** CDC-ACM ports with the same serial number; the
+  control interface is **USB interface 01**. `ppk2_connect` finds it
+  automatically by USB VID:PID (`1915:c00a`) and picks that interface, so you
+  normally don't pass `port` — and it follows the device across a USB
+  re-enumeration (when the `/dev/ttyACM*` number changes). Pass an explicit
+  `port` to override.
 - Voltage/DUT-power changes are only allowed while **not** measuring.
 - Source mode = the PPK2 supplies the DUT (0.8–5 V). Ampere mode = external
   supply, PPK2 as an inline meter.
+
+### Connection loss & recovery
+
+If the device is unplugged or re-enumerates mid-session, the next call fails
+with a link/IO error and the server marks the connection **broken**:
+`ppk2_status` then reports `connected=false broken=true` and shows DUT power as
+**`unknown`** (a failed power-off write means the real state can't be verified —
+it is not assumed off). Recover by calling `ppk2_connect` again: it re-discovers
+the port and, as always, forces DUT power off on connect.
 
 ## Platform support
 

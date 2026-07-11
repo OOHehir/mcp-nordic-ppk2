@@ -58,6 +58,49 @@ fn validate_voltage(mv: u16, ceiling_mv: u16) -> Result<()> {
     Ok(())
 }
 
+/// PPK2 USB identifiers (Nordic Semiconductor).
+pub const PPK2_VID: u16 = 0x1915;
+pub const PPK2_PID: u16 = 0xc00a;
+/// The PPK2 exposes two CDC-ACM interfaces with the same serial number; interface
+/// 1 is the control/measurement port. Selecting by interface number (rather than
+/// device path) is stable across USB re-enumeration.
+const PPK2_CONTROL_INTERFACE: u8 = 1;
+
+/// From candidate `(port_name, usb_interface)` pairs, pick the PPK2 control port:
+/// prefer USB interface 1, else fall back to the lowest-named port. Pure so it
+/// can be unit-tested without hardware.
+fn select_control_port(mut candidates: Vec<(String, Option<u8>)>) -> Option<String> {
+    candidates.sort_by(|a, b| a.0.cmp(&b.0));
+    candidates
+        .iter()
+        .find(|(_, iface)| *iface == Some(PPK2_CONTROL_INTERFACE))
+        .or_else(|| candidates.first())
+        .map(|(name, _)| name.clone())
+}
+
+/// Locate the PPK2's control serial port by USB VID:PID, disambiguating the two
+/// ACM interfaces in favour of the control one. Unlike a fixed `/dev/ttyACM0`,
+/// this follows the device across a re-enumeration.
+pub fn discover_ppk2_port() -> Result<String> {
+    use serialport::SerialPortType::UsbPort;
+    let candidates: Vec<(String, Option<u8>)> = serialport::available_ports()
+        .context("enumerating serial ports")?
+        .into_iter()
+        .filter_map(|p| match p.port_type {
+            UsbPort(usb) if usb.vid == PPK2_VID && usb.pid == PPK2_PID => {
+                Some((p.port_name, usb.interface))
+            }
+            _ => None,
+        })
+        .collect();
+    select_control_port(candidates).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no PPK2 (USB {PPK2_VID:04x}:{PPK2_PID:04x}) found — is it plugged in, \
+             and are permissions set (dialout group / nrf-udev rules)?"
+        )
+    })
+}
+
 /// Aggregate statistics over a measurement session.
 #[derive(Debug, Clone, Serialize)]
 pub struct Stats {
@@ -259,6 +302,9 @@ pub struct Status {
     pub mode: MeasurementMode,
     pub voltage_mv: u16,
     pub max_voltage_mv: u16,
+    /// Last-commanded DUT power state. Only reliable while `!broken`; when
+    /// `broken`, the true state is unknown — a failed power write may have left
+    /// the DUT in either state, so callers must treat this as last-known-only.
     pub dut_power: bool,
     pub sps: Option<usize>,
     pub buffered_samples: Option<usize>,
@@ -284,7 +330,7 @@ impl Ppk2Controller {
     ) -> Result<Self> {
         validate_voltage(voltage_mv, max_voltage_mv)?;
         let mut ppk2 = Ppk2::new(port, mode)
-            .with_context(|| format!("opening PPK2 on {port}"))?;
+            .with_context(|| format!("opening PPK2 on {port} (in use, missing permissions, or unplugged?)"))?;
         ppk2.set_device_power(DevicePower::Disabled)
             .context("forcing DUT power off on connect")?;
         ppk2.set_source_voltage(SourceVoltage::from_millivolts(voltage_mv))
@@ -301,32 +347,53 @@ impl Ppk2Controller {
         })
     }
 
-    /// Set the source voltage (mV). Only valid while idle. Rejected (not clamped)
-    /// if out of the PPK2 range or above the configured safety ceiling.
-    pub fn set_source_voltage(&mut self, mv: u16) -> Result<()> {
-        validate_voltage(mv, self.max_voltage_mv)?;
-        match &mut self.state {
-            State::Idle(ppk2) => {
-                ppk2.set_source_voltage(SourceVoltage::from_millivolts(mv))?;
-                self.voltage_mv = mv;
-                Ok(())
+    /// Take the idle device handle for a write, leaving the controller marked
+    /// `Broken` for the duration. The caller restores `Idle` on success; on a
+    /// device IO error it stays `Broken` (the handle is dropped), so a failed
+    /// write is detected instead of leaving a live-looking but dead connection.
+    fn take_idle_for_write(&mut self, busy_msg: &str) -> Result<Ppk2> {
+        match std::mem::replace(&mut self.state, State::Broken) {
+            State::Idle(ppk2) => Ok(ppk2),
+            State::Measuring(s) => {
+                self.state = State::Measuring(s);
+                bail!("{busy_msg}");
             }
-            State::Measuring(_) => bail!("stop measuring before changing voltage"),
-            State::Broken => bail!("controller is broken; reconnect"),
+            State::Broken => bail!("controller is broken; reconnect (ppk2_connect)"),
         }
     }
 
-    /// Enable/disable DUT power. Only valid while idle.
-    pub fn set_dut_power(&mut self, on: bool) -> Result<()> {
-        match &mut self.state {
-            State::Idle(ppk2) => {
-                let p = if on { DevicePower::Enabled } else { DevicePower::Disabled };
-                ppk2.set_device_power(p)?;
-                self.dut_power = on;
+    /// Set the source voltage (mV). Only valid while idle. Rejected (not clamped)
+    /// if out of the PPK2 range or above the configured safety ceiling. A device
+    /// IO failure marks the controller broken.
+    pub fn set_source_voltage(&mut self, mv: u16) -> Result<()> {
+        validate_voltage(mv, self.max_voltage_mv)?;
+        let mut ppk2 = self.take_idle_for_write("stop measuring before changing voltage")?;
+        match ppk2.set_source_voltage(SourceVoltage::from_millivolts(mv)) {
+            Ok(()) => {
+                self.voltage_mv = mv;
+                self.state = State::Idle(ppk2);
                 Ok(())
             }
-            State::Measuring(_) => bail!("stop measuring before toggling DUT power"),
-            State::Broken => bail!("controller is broken; reconnect"),
+            // state stays Broken; ppk2 (dead handle) is dropped here.
+            Err(e) => Err(anyhow::Error::new(e).context("setting source voltage (link lost)")),
+        }
+    }
+
+    /// Enable/disable DUT power. Only valid while idle. A device IO failure marks
+    /// the controller broken — critically, if disabling power fails, the real DUT
+    /// power state becomes unknown (see [`Status::dut_power`]).
+    pub fn set_dut_power(&mut self, on: bool) -> Result<()> {
+        let mut ppk2 = self.take_idle_for_write("stop measuring before toggling DUT power")?;
+        let p = if on { DevicePower::Enabled } else { DevicePower::Disabled };
+        match ppk2.set_device_power(p) {
+            Ok(()) => {
+                self.dut_power = on;
+                self.state = State::Idle(ppk2);
+                Ok(())
+            }
+            // state stays Broken; `dut_power` keeps its last-commanded value, but
+            // status reports it as unknown while broken.
+            Err(e) => Err(anyhow::Error::new(e).context("setting DUT power (link lost)")),
         }
     }
 
@@ -552,5 +619,34 @@ mod tests {
     fn voltage_above_ceiling_rejected() {
         assert!(validate_voltage(3301, 3300).is_err());
         assert!(validate_voltage(VDD_HW_MAX_MV, 3300).is_err());
+    }
+
+    fn p(name: &str, iface: Option<u8>) -> (String, Option<u8>) {
+        (name.to_string(), iface)
+    }
+
+    #[test]
+    fn control_port_prefers_interface_1() {
+        // Real PPK2 layout: control = iface 1 (ttyACM0), secondary = iface 3.
+        let got = select_control_port(vec![p("/dev/ttyACM2", Some(3)), p("/dev/ttyACM0", Some(1))]);
+        assert_eq!(got.as_deref(), Some("/dev/ttyACM0"));
+    }
+
+    #[test]
+    fn control_port_interface_1_wins_over_lower_path() {
+        // Interface number, not device path, decides — survives re-enumeration.
+        let got = select_control_port(vec![p("/dev/ttyACM0", Some(3)), p("/dev/ttyACM2", Some(1))]);
+        assert_eq!(got.as_deref(), Some("/dev/ttyACM2"));
+    }
+
+    #[test]
+    fn control_port_falls_back_to_lowest_path_without_interface_info() {
+        let got = select_control_port(vec![p("/dev/ttyACM2", None), p("/dev/ttyACM0", None)]);
+        assert_eq!(got.as_deref(), Some("/dev/ttyACM0"));
+    }
+
+    #[test]
+    fn control_port_none_when_empty() {
+        assert_eq!(select_control_port(vec![]), None);
     }
 }
