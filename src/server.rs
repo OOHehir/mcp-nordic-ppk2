@@ -24,6 +24,8 @@ type SharedCtl = Arc<Mutex<Option<Ppk2Controller>>>;
 /// MCP server holding a single PPK2 controller instance.
 pub struct Ppk2Server {
     ctl: SharedCtl,
+    /// Operator safety ceiling (mV) applied to every connect/configure request.
+    max_voltage_mv: u16,
     // Populated by `Self::tool_router()` and consumed by the `#[tool_handler]`
     // macro's generated dispatch; not read directly, hence the allow.
     #[allow(dead_code)]
@@ -40,14 +42,14 @@ pub struct ConnectArgs {
     /// Measurement mode: "source" (PPK2 supplies the DUT) or "ampere" (external supply, inline meter). Defaults to source.
     #[serde(default)]
     pub mode: Option<String>,
-    /// Source voltage in millivolts (800–5000). Defaults to 3300.
+    /// Source voltage in millivolts (800–5000). Rejected (not clamped) if out of range or above the server's configured safety ceiling. Defaults to 3300.
     #[serde(default)]
     pub voltage_mv: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ConfigureArgs {
-    /// New source voltage in millivolts (800–5000). Omit to leave unchanged. Only valid while not measuring.
+    /// New source voltage in millivolts (800–5000). Rejected (not clamped) if out of range or above the server's configured safety ceiling. Omit to leave unchanged. Only valid while not measuring.
     #[serde(default)]
     pub voltage_mv: Option<u16>,
     /// Turn DUT power on/off. Omit to leave unchanged. Only valid while not measuring.
@@ -89,9 +91,11 @@ pub struct ExportArgs {
 // ---- helpers (non-tool impl) ----
 
 impl Ppk2Server {
-    pub fn new() -> Self {
+    /// Create a server that will never apply a source voltage above `max_voltage_mv`.
+    pub fn new(max_voltage_mv: u16) -> Self {
         Self {
             ctl: Arc::new(Mutex::new(None)),
+            max_voltage_mv,
             tool_router: Self::tool_router(),
         }
     }
@@ -115,7 +119,7 @@ impl Ppk2Server {
 
 impl Default for Ppk2Server {
     fn default() -> Self {
-        Self::new()
+        Self::new(crate::controller::VDD_HW_MAX_MV)
     }
 }
 
@@ -170,6 +174,7 @@ impl Ppk2Server {
         &self,
         Parameters(args): Parameters<ConnectArgs>,
     ) -> Result<CallToolResult, McpError> {
+        let max_voltage_mv = self.max_voltage_mv;
         let s = self
             .blocking(move |g| {
                 let port = args.port.unwrap_or_else(|| "/dev/ttyACM0".to_string());
@@ -178,7 +183,7 @@ impl Ppk2Server {
                     None => MeasurementMode::Source,
                 };
                 let voltage = args.voltage_mv.unwrap_or(3300);
-                let ctl = Ppk2Controller::connect(&port, mode, voltage)?;
+                let ctl = Ppk2Controller::connect(&port, mode, voltage, max_voltage_mv)?;
                 let st = ctl.status();
                 *g = Some(ctl);
                 Ok(format!(
@@ -306,9 +311,9 @@ impl Ppk2Server {
                     Some(c) => {
                         let st = c.status();
                         Ok(format!(
-                            "port={} connected={} measuring={} broken={} mode={:?} voltage={}mV dut_power={} sps={:?} buffered={:?} elapsed_s={:?} trigger={:?}",
+                            "port={} connected={} measuring={} broken={} mode={:?} voltage={}mV max_voltage={}mV dut_power={} sps={:?} buffered={:?} elapsed_s={:?} trigger={:?}",
                             st.port, st.connected, st.measuring, st.broken, st.mode,
-                            st.voltage_mv, st.dut_power, st.sps, st.buffered_samples, st.elapsed_s, st.trigger
+                            st.voltage_mv, st.max_voltage_mv, st.dut_power, st.sps, st.buffered_samples, st.elapsed_s, st.trigger
                         ))
                     }
                 }

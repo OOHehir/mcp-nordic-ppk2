@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use ppk2::types::MeasurementMode;
-use mcp_nordic_ppk2::controller::Ppk2Controller;
+use mcp_nordic_ppk2::controller::{Ppk2Controller, VDD_HW_MAX_MV};
 
 fn main() -> Result<()> {
     let port = std::env::args().nth(1).unwrap_or_else(|| "/dev/ttyACM0".to_string());
@@ -15,7 +15,8 @@ fn main() -> Result<()> {
 
     println!("== controller smoke test ==\nport: {port}");
 
-    let mut ctl = Ppk2Controller::connect(&port, MeasurementMode::Source, voltage_mv)?;
+    let mut ctl =
+        Ppk2Controller::connect(&port, MeasurementMode::Source, voltage_mv, VDD_HW_MAX_MV)?;
     println!("connected; {:?}", ctl.status());
 
     ctl.set_dut_power(true)?;

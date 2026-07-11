@@ -47,6 +47,35 @@ The PPK2 has 8 digital logic inputs (D0–D7). Every sample records their state:
   captures current only while **D1 is high**, so you can profile a device's
   consumption during a specific activity signalled on a GPIO.
 
+## Safety
+
+In source mode the PPK2 supplies the DUT, so a wrong voltage can destroy it.
+The server has three guardrails:
+
+- **Voltage is rejected, not clamped.** Requests outside the PPK2's 800–5000 mV
+  range return an error instead of being silently clamped (which is what the
+  underlying crate does on its own). A fat-fingered `33000` fails loudly rather
+  than quietly applying 5.0 V.
+- **Operator ceiling.** Set `--max-voltage-mv <mV>` (or the
+  `PPK2_MAX_VOLTAGE_MV` env var) to your DUT's rating and the server will refuse
+  any higher voltage — so the model *cannot* exceed it. Defaults to the 5000 mV
+  hardware maximum if unset. This is the real per-DUT rail: **set it to match
+  your part** (e.g. `3300` for a 3.3 V board).
+
+  ```json
+  { "mcpServers": { "ppk2": { "command": "mcp-nordic-ppk2",
+      "args": ["--max-voltage-mv", "3300"] } } }
+  ```
+- **Power off at startup, fail closed.** On connect the server explicitly forces
+  DUT power **off** on the hardware (not just in software) before doing anything
+  else, and aborts the connect if it can't confirm that — so a device left
+  powered by a previous crashed session can't keep driving the DUT. Power is only
+  applied by an explicit `ppk2_configure` with `dut_power: true`.
+  Consequence by design: reconnecting cuts power to an already-powered DUT.
+
+The ceiling protects against wrong *values*; it cannot know your DUT's true
+rating, so setting `--max-voltage-mv` per bench is what actually protects the part.
+
 ## Install
 
 Requires a Rust toolchain and, on Linux, libudev for the `serialport` crate:

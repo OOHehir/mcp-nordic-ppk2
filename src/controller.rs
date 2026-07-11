@@ -28,6 +28,31 @@ use ppk2::{
 /// 1 mAh expressed in microcoulombs (µC): 1 mAh = 3.6 C = 3.6e6 µC.
 const UC_PER_MAH: f64 = 3.6e6;
 
+/// PPK2 source-voltage hardware limits (millivolts). The device can only supply
+/// within this window; the `ppk2` crate silently clamps out-of-range requests,
+/// so we validate against these ourselves and reject instead.
+pub const VDD_MIN_MV: u16 = 800;
+pub const VDD_HW_MAX_MV: u16 = 5000;
+
+/// Reject a source voltage that is out of the PPK2's range, or above the
+/// operator-configured safety ceiling, rather than silently clamping it (which
+/// is what the underlying crate would otherwise do — a footgun for a DUT).
+fn validate_voltage(mv: u16, ceiling_mv: u16) -> Result<()> {
+    if mv < VDD_MIN_MV {
+        bail!("voltage {mv} mV is below the PPK2 minimum of {VDD_MIN_MV} mV");
+    }
+    if mv > VDD_HW_MAX_MV {
+        bail!("voltage {mv} mV exceeds the PPK2 hardware maximum of {VDD_HW_MAX_MV} mV");
+    }
+    if mv > ceiling_mv {
+        bail!(
+            "voltage {mv} mV exceeds the configured safety ceiling of {ceiling_mv} mV \
+             (raise it with --max-voltage-mv or PPK2_MAX_VOLTAGE_MV)"
+        );
+    }
+    Ok(())
+}
+
 /// Aggregate statistics over a measurement session.
 #[derive(Debug, Clone, Serialize)]
 pub struct Stats {
@@ -212,6 +237,8 @@ pub struct Ppk2Controller {
     mode: MeasurementMode,
     voltage_mv: u16,
     dut_power: bool,
+    /// Operator-configured maximum source voltage (mV); requests above this are rejected.
+    max_voltage_mv: u16,
     /// Retained samples from the most recent session (for CSV export after stop).
     last_samples: Option<(usize, Vec<(f32, u8)>)>,
     last_stats: Option<Stats>,
@@ -226,6 +253,7 @@ pub struct Status {
     pub broken: bool,
     pub mode: MeasurementMode,
     pub voltage_mv: u16,
+    pub max_voltage_mv: u16,
     pub dut_power: bool,
     pub sps: Option<usize>,
     pub buffered_samples: Option<usize>,
@@ -236,10 +264,24 @@ pub struct Status {
 
 impl Ppk2Controller {
     /// Open the device, read metadata, and set the source voltage. Leaves the
-    /// controller idle with DUT power off.
-    pub fn connect(port: &str, mode: MeasurementMode, voltage_mv: u16) -> Result<Self> {
+    /// controller idle with DUT power off. `max_voltage_mv` is the operator safety
+    /// ceiling: `voltage_mv` (and any later change) above it is rejected.
+    ///
+    /// Safety: the requested voltage is validated *before* the device is touched,
+    /// and DUT power is explicitly forced off on the hardware immediately after
+    /// opening — so a device left powered by a previous session cannot keep
+    /// driving the DUT. If that disable can't be confirmed, connect fails closed.
+    pub fn connect(
+        port: &str,
+        mode: MeasurementMode,
+        voltage_mv: u16,
+        max_voltage_mv: u16,
+    ) -> Result<Self> {
+        validate_voltage(voltage_mv, max_voltage_mv)?;
         let mut ppk2 = Ppk2::new(port, mode)
             .with_context(|| format!("opening PPK2 on {port}"))?;
+        ppk2.set_device_power(DevicePower::Disabled)
+            .context("forcing DUT power off on connect")?;
         ppk2.set_source_voltage(SourceVoltage::from_millivolts(voltage_mv))
             .context("setting source voltage")?;
         Ok(Self {
@@ -248,13 +290,16 @@ impl Ppk2Controller {
             mode,
             voltage_mv,
             dut_power: false,
+            max_voltage_mv,
             last_samples: None,
             last_stats: None,
         })
     }
 
-    /// Set the source voltage (mV). Only valid while idle.
+    /// Set the source voltage (mV). Only valid while idle. Rejected (not clamped)
+    /// if out of the PPK2 range or above the configured safety ceiling.
     pub fn set_source_voltage(&mut self, mv: u16) -> Result<()> {
+        validate_voltage(mv, self.max_voltage_mv)?;
         match &mut self.state {
             State::Idle(ppk2) => {
                 ppk2.set_source_voltage(SourceVoltage::from_millivolts(mv))?;
@@ -462,11 +507,45 @@ impl Ppk2Controller {
             broken,
             mode: self.mode,
             voltage_mv: self.voltage_mv,
+            max_voltage_mv: self.max_voltage_mv,
             dut_power: self.dut_power,
             sps,
             buffered_samples: buffered,
             elapsed_s: elapsed,
             trigger,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn voltage_within_range_and_ceiling_ok() {
+        assert!(validate_voltage(3300, 5000).is_ok());
+        assert!(validate_voltage(VDD_MIN_MV, VDD_HW_MAX_MV).is_ok());
+        assert!(validate_voltage(VDD_HW_MAX_MV, VDD_HW_MAX_MV).is_ok());
+        assert!(validate_voltage(3300, 3300).is_ok()); // exactly at ceiling
+    }
+
+    #[test]
+    fn voltage_below_minimum_rejected() {
+        assert!(validate_voltage(VDD_MIN_MV - 1, VDD_HW_MAX_MV).is_err());
+        assert!(validate_voltage(0, VDD_HW_MAX_MV).is_err());
+    }
+
+    #[test]
+    fn voltage_above_hardware_max_rejected() {
+        assert!(validate_voltage(VDD_HW_MAX_MV + 1, VDD_HW_MAX_MV).is_err());
+        // The classic extra-zero fat-finger (3300 -> 33000) must fail loudly,
+        // not clamp to 5000 V and cook a 3.3 V part.
+        assert!(validate_voltage(33000, VDD_HW_MAX_MV).is_err());
+    }
+
+    #[test]
+    fn voltage_above_ceiling_rejected() {
+        assert!(validate_voltage(3301, 3300).is_err());
+        assert!(validate_voltage(VDD_HW_MAX_MV, 3300).is_err());
     }
 }
