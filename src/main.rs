@@ -1,10 +1,10 @@
 //! PPK2 MCP server entry point. Serves the tool surface over stdio so it can be
 //! launched by an MCP client (Claude Code / Claude Desktop) as a subprocess.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use mcp_nordic_ppk2::controller::{DEFAULT_MAX_VOLTAGE_MV, VDD_HW_MAX_MV, VDD_MIN_MV};
 use mcp_nordic_ppk2::server::Ppk2Server;
-use rmcp::{transport::stdio, ServiceExt};
+use rmcp::{ServiceExt, transport::stdio};
 
 /// Resolve the source-voltage safety ceiling (mV): `--max-voltage-mv <N>` (or
 /// `--max-voltage-mv=<N>`) takes precedence over the `PPK2_MAX_VOLTAGE_MV`
@@ -38,8 +38,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 

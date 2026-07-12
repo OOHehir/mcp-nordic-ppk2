@@ -2,6 +2,8 @@
 name = "mcp-nordic-ppk2"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+authors = ["OOHehir <40183643+OOHehir@users.noreply.github.com>"]
 description = "Model Context Protocol (MCP) server for the Nordic Power Profiler Kit II (PPK2) — measure current and use the digital channels as triggers, from an MCP client."
 license = "MIT"
 repository = "https://github.com/OOHehir/mcp-nordic-ppk2"

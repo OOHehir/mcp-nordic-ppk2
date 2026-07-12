@@ -17,13 +17,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use anyhow::{Context, Result, bail};
 use ppk2::{
+    Ppk2,
     measurement::MeasurementMatch,
     types::{DevicePower, Level, LogicPortPins, MeasurementMode, SourceVoltage},
-    Ppk2,
 };
+use serde::Serialize;
 
 /// 1 mAh expressed in microcoulombs (µC): 1 mAh = 3.6 C = 3.6e6 µC.
 const UC_PER_MAH: f64 = 3.6e6;
@@ -199,8 +199,16 @@ impl Shared {
         let mean = self.sum / n;
         let var = (self.sum_sq / n - mean * mean).max(0.0);
         // Each aggregated sample covers dt = 1/sps seconds; charge = Σ(I · dt).
-        let charge_uc = if self.sps > 0 { self.sum / self.sps as f64 } else { 0.0 };
-        let duration_s = if self.sps > 0 { n / self.sps as f64 } else { 0.0 };
+        let charge_uc = if self.sps > 0 {
+            self.sum / self.sps as f64
+        } else {
+            0.0
+        };
+        let duration_s = if self.sps > 0 {
+            n / self.sps as f64
+        } else {
+            0.0
+        };
         Stats {
             samples: self.count,
             duration_s,
@@ -221,7 +229,10 @@ impl Shared {
 pub fn parse_trigger(pattern: &str) -> Result<[Level; 8]> {
     let chars: Vec<char> = pattern.trim().chars().collect();
     if chars.len() != 8 {
-        bail!("trigger must be exactly 8 characters (D0..D7), got {}", chars.len());
+        bail!(
+            "trigger must be exactly 8 characters (D0..D7), got {}",
+            chars.len()
+        );
     }
     let mut levels = [Level::Either; 8];
     for (i, c) in chars.iter().enumerate() {
@@ -329,8 +340,9 @@ impl Ppk2Controller {
         max_voltage_mv: u16,
     ) -> Result<Self> {
         validate_voltage(voltage_mv, max_voltage_mv)?;
-        let mut ppk2 = Ppk2::new(port, mode)
-            .with_context(|| format!("opening PPK2 on {port} (in use, missing permissions, or unplugged?)"))?;
+        let mut ppk2 = Ppk2::new(port, mode).with_context(|| {
+            format!("opening PPK2 on {port} (in use, missing permissions, or unplugged?)")
+        })?;
         ppk2.set_device_power(DevicePower::Disabled)
             .context("forcing DUT power off on connect")?;
         ppk2.set_source_voltage(SourceVoltage::from_millivolts(voltage_mv))
@@ -384,7 +396,11 @@ impl Ppk2Controller {
     /// power state becomes unknown (see [`Status::dut_power`]).
     pub fn set_dut_power(&mut self, on: bool) -> Result<()> {
         let mut ppk2 = self.take_idle_for_write("stop measuring before toggling DUT power")?;
-        let p = if on { DevicePower::Enabled } else { DevicePower::Disabled };
+        let p = if on {
+            DevicePower::Enabled
+        } else {
+            DevicePower::Disabled
+        };
         match ppk2.set_device_power(p) {
             Ok(()) => {
                 self.dut_power = on;
@@ -435,18 +451,21 @@ impl Ppk2Controller {
         let drain = {
             let shared = shared.clone();
             let stop_flag = stop_flag.clone();
-            thread::spawn(move || loop {
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-                match rx.recv_timeout(Duration::from_millis(200)) {
-                    Ok(MeasurementMatch::Match(m)) => {
-                        shared.lock().unwrap().push(m.micro_amps, pins_to_byte(&m.pins))
+            thread::spawn(move || {
+                loop {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
                     }
-                    // NoMatch = window filtered out by the trigger; nothing recorded.
-                    Ok(MeasurementMatch::NoMatch) => {}
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => break,
+                    match rx.recv_timeout(Duration::from_millis(200)) {
+                        Ok(MeasurementMatch::Match(m)) => shared
+                            .lock()
+                            .unwrap()
+                            .push(m.micro_amps, pins_to_byte(&m.pins)),
+                        // NoMatch = window filtered out by the trigger; nothing recorded.
+                        Ok(MeasurementMatch::NoMatch) => {}
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
                 }
             })
         };

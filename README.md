@@ -1,7 +1,7 @@
 # mcp-nordic-ppk2
 
-An [MCP](https://modelcontextprotocol.io) server that exposes a **Nordic Power
-Profiler Kit II (PPK2)** to an MCP client (Claude Code / Claude Desktop) over
+An [MCP](https://modelcontextprotocol.io) server that exposes a [Nordic Power
+Profiler Kit II (PPK2)](https://www.nordicsemi.com/Products/Development-hardware/Power-Profiler-Kit-2) to an MCP client (Claude Code / Claude Desktop) over
 stdio. It lets a model connect to the device, power a DUT in source mode,
 capture current, read the 8 digital channels, and use them as triggers —
 returning summary statistics or a CSV.
@@ -82,6 +82,12 @@ Requires a Rust toolchain and, on Linux, libudev for the `serialport` crate:
 
 ```sh
 sudo apt install libudev-dev pkg-config   # Debian/Ubuntu
+cargo install mcp-nordic-ppk2             # from crates.io
+```
+
+Or build from a checkout:
+
+```sh
 cargo install --path .                     # builds and installs `mcp-nordic-ppk2` to ~/.cargo/bin
 ```
 

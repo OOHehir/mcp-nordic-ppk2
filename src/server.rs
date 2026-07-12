@@ -7,16 +7,17 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use ppk2::types::MeasurementMode;
 use rmcp::{
+    ErrorData as McpError, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
+    tool, tool_handler, tool_router,
 };
 use serde::Deserialize;
 
-use crate::controller::{parse_trigger, Ppk2Controller, Stats};
+use crate::controller::{Ppk2Controller, Stats, parse_trigger};
 use ppk2::types::Level;
 
 type SharedCtl = Arc<Mutex<Option<Ppk2Controller>>>;
@@ -156,8 +157,15 @@ fn format_stats(label: &str, s: &Stats) -> String {
          charge:    {:.3} µC ({:.6} mAh)\n\
          pin duty:  {duty}\n\
          json: {json}",
-        s.samples, s.duration_s, s.mean_ua, s.avg_ma, s.min_ua, s.max_ua, s.stddev_ua,
-        s.charge_uc, s.charge_mah
+        s.samples,
+        s.duration_s,
+        s.mean_ua,
+        s.avg_ma,
+        s.min_ua,
+        s.max_ua,
+        s.stddev_ua,
+        s.charge_uc,
+        s.charge_mah
     )
 }
 
@@ -173,7 +181,9 @@ fn trigger_arg(t: Option<String>) -> Result<Option<[Level; 8]>> {
 
 #[tool_router]
 impl Ppk2Server {
-    #[tool(description = "Connect to the PPK2 over serial, read calibration metadata, and set the source voltage. Auto-discovers the device by USB VID:PID if no port is given. Leaves DUT power off.")]
+    #[tool(
+        description = "Connect to the PPK2 over serial, read calibration metadata, and set the source voltage. Auto-discovers the device by USB VID:PID if no port is given. Leaves DUT power off."
+    )]
     async fn ppk2_connect(
         &self,
         Parameters(args): Parameters<ConnectArgs>,
@@ -203,7 +213,9 @@ impl Ppk2Server {
         Ok(text(s))
     }
 
-    #[tool(description = "Set source voltage (mV) and/or toggle DUT power. Only valid while not measuring.")]
+    #[tool(
+        description = "Set source voltage (mV) and/or toggle DUT power. Only valid while not measuring."
+    )]
     async fn ppk2_configure(
         &self,
         Parameters(args): Parameters<ConfigureArgs>,
@@ -227,7 +239,9 @@ impl Ppk2Server {
         Ok(text(s))
     }
 
-    #[tool(description = "Capture current for a fixed duration and return summary statistics (mean/min/max/stddev µA, charge). Blocks for the duration.")]
+    #[tool(
+        description = "Capture current for a fixed duration and return summary statistics (mean/min/max/stddev µA, charge). Blocks for the duration."
+    )]
     async fn ppk2_measure(
         &self,
         Parameters(args): Parameters<MeasureArgs>,
@@ -247,7 +261,9 @@ impl Ppk2Server {
         Ok(text(s))
     }
 
-    #[tool(description = "Start a background measurement session. Use ppk2_stats to query and ppk2_stop to finish.")]
+    #[tool(
+        description = "Start a background measurement session. Use ppk2_stats to query and ppk2_stop to finish."
+    )]
     async fn ppk2_start(
         &self,
         Parameters(args): Parameters<StartArgs>,
@@ -263,13 +279,17 @@ impl Ppk2Server {
                 let trigger = trigger_arg(args.trigger)?;
                 let c = require(g)?;
                 c.start(sps, retention, trigger)?;
-                Ok(format!("measuring @ {sps} sps (retention {retention}s{trig_desc})"))
+                Ok(format!(
+                    "measuring @ {sps} sps (retention {retention}s{trig_desc})"
+                ))
             })
             .await?;
         Ok(text(s))
     }
 
-    #[tool(description = "Stop the current background measurement session and return its final statistics.")]
+    #[tool(
+        description = "Stop the current background measurement session and return its final statistics."
+    )]
     async fn ppk2_stop(&self) -> Result<CallToolResult, McpError> {
         let s = self
             .blocking(move |g| {
@@ -281,7 +301,9 @@ impl Ppk2Server {
         Ok(text(s))
     }
 
-    #[tool(description = "Return statistics for the live session (if measuring) or the most recent session.")]
+    #[tool(
+        description = "Return statistics for the live session (if measuring) or the most recent session."
+    )]
     async fn ppk2_stats(&self) -> Result<CallToolResult, McpError> {
         let s = self
             .blocking(move |g| {
@@ -295,7 +317,9 @@ impl Ppk2Server {
         Ok(text(s))
     }
 
-    #[tool(description = "Export the retained sample buffer to a CSV file (columns: t_seconds,current_ua).")]
+    #[tool(
+        description = "Export the retained sample buffer to a CSV file (columns: t_seconds,current_ua)."
+    )]
     async fn ppk2_export_csv(
         &self,
         Parameters(args): Parameters<ExportArgs>,

@@ -5,11 +5,13 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use ppk2::types::MeasurementMode;
 use mcp_nordic_ppk2::controller::{Ppk2Controller, VDD_HW_MAX_MV};
+use ppk2::types::MeasurementMode;
 
 fn main() -> Result<()> {
-    let port = std::env::args().nth(1).unwrap_or_else(|| "/dev/ttyACM0".to_string());
+    let port = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/dev/ttyACM0".to_string());
     let voltage_mv = 3300u16;
     let sps = 10_000usize;
 
